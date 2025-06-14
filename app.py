@@ -80,7 +80,7 @@ def github_webhook():
     signature = request.headers.get('X-Hub-Signature-256')
     if not verify_github_signature(request.data, signature):
         logger.warning("Invalid webhook signature!")
-        abort(403, "Invalid signature")
+        abort(403, "Invalid signature ")
 
     # Process push events
     try:
