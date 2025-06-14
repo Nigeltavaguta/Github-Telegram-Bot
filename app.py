@@ -76,12 +76,19 @@ def deep_health_check():
 @app.route('/github', methods=['POST'])
 def github_webhook():
     """Handle GitHub webhook events"""
+
     # Verify signature
     signature = request.headers.get('X-Hub-Signature-256')
     if not verify_github_signature(request.data, signature):
         logger.warning("Invalid webhook signature!")
         abort(403, "Invalid signature ")
 
+    logger.info(f"Received GitHub signature: {signature}")  # Add this line
+    if not verify_github_signature(request.data, signature):
+        logger.error(f"Secret mismatch! Expected: {GITHUB_WEBHOOK_SECRET}")  # Add this
+        abort(403, "Invalid signature")
+
+    
     # Process push events
     try:
         data = request.get_json()
@@ -95,13 +102,11 @@ def github_webhook():
 
         for commit in commits:
             message = (
-                f"📦 *New Commit to {repo['name']}*\n"
-                f"👤 Author: {commit['author']['name']}\n"
-                f"📤 Pushed by: {pusher}\n"
-                f"🌿 Branch: {branch}\n"
-                f"🕒 Time: {commit['timestamp']}\n"
-                f"📝 Message: {commit['message']}\n"
-                f"🔗 [View Commit]({commit['url']})" 
+                f"*New Commit to {repo['name']}*\n"
+                f"Author: {commit['author']['name']}\n"
+                f"Branch: {branch}\n"
+                f"Message: {commit['message']}\n"
+                f"URL: {commit['url']}"  # Simplified format
             )
             if not send_telegram_message(message):
                 logger.error("Failed to send Telegram notification")
