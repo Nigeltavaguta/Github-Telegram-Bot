@@ -1,11 +1,15 @@
 services:
   - type: web
-    name: Github-Telegram-Bot
+    name: github-telegram-webhook
     runtime: python
-    buildCommand: ""
-    startCommand: "python app.py"
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
     envVars:
       - key: TELEGRAM_BOT_TOKEN
-        value: 8054638204:AAEtP-ilMQWRL1ECzI-2SUHxqHX9QZRV2qk
+        value: your_actual_token_here  # ← Set in dashboard
       - key: TELEGRAM_CHAT_ID
-        value: 6786416278
+        value: your_chat_id_here       # ← Set in dashboard
+      - key: GITHUB_WEBHOOK_SECRET
+        value: your_generated_secret   # ← Set in dashboard
+      - key: PORT
+        value: 8000
