@@ -6,6 +6,7 @@ import hashlib
 import logging
 from datetime import datetime
 
+# Initialize Flask app
 app = Flask(__name__)
 
 # Configure logging
@@ -15,89 +16,151 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Configuration
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+# Load environment variables
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
-WEBHOOK_SECRET = os.getenv('GITHUB_WEBHOOK_SECRET')
+GITHUB_WEBHOOK_SECRET = os.getenv('GITHUB_WEBHOOK_SECRET')
 
-def verify_signature(payload, signature):
-    if not WEBHOOK_SECRET:
-        return True  # Allow if no secret configured
+def verify_github_signature(payload_body, signature_header):
+    """Verify GitHub webhook signature using HMAC-SHA256"""
+    if not GITHUB_WEBHOOK_SECRET:
+        logger.error("Webhook secret not configured")
+        return False
+        
+    secret = GITHUB_WEBHOOK_SECRET.encode()
+    expected_signature = hmac.new(secret, payload_body, hashlib.sha256).hexdigest()
+    expected_header = f'sha256={expected_signature}'
+    return hmac.compare_digest(expected_header, signature_header)
+
+def send_telegram_message(text):
+    """Send message to Telegram with error handling"""
+    if not all([TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
+        logger.error("Telegram credentials not configured")
+        return False
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True
+    }
     
-    secret = WEBHOOK_SECRET.encode()
-    expected = hmac.new(secret, payload, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(f'sha256={expected}', signature)
-
-def send_telegram(message):
-    if not all([TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
-        logger.error("Missing Telegram config")
-        return False
-
     try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": message,
-                "parse_mode": "Markdown"
-            },
-            timeout=10
-        )
+        response = requests.post(url, json=payload, timeout=10)
         response.raise_for_status()
+        logger.info("Telegram message sent successfully")
         return True
-    except Exception as e:
-        logger.error(f"Telegram error: {e}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Telegram API error: {str(e)}")
+        if hasattr(e, 'response') and e.response:
+            logger.error(f"Telegram API response: {e.response.text}")
         return False
-
-def format_message(repo, commits, branch, pusher):
-    return (
-        f"📌 *{repo['name']}* | {len(commits)} new commit(s)\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"🔹 *Branch*: `{branch}`\n"
-        f"👤 *By*: {pusher}\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"💬 *Message*:\n`{commits[0]['message']}`\n"
-        f"🔗 [View Changes]({repo['url']}/compare/{commits[-1]['id']...{commits[0]['id']})"
-    )
 
 @app.route('/')
-def health():
+def health_check():
+    """Root endpoint with service information"""
     return jsonify({
         "status": "running",
-        "timestamp": datetime.utcnow().isoformat()
+        "service": "github-webhook",
+        "timestamp": datetime.utcnow().isoformat(),
+        "endpoints": {
+            "webhook": "/github (POST)",
+            "health": "/health (GET)"
+        }
+    })
+
+@app.route('/health')
+def deep_health_check():
+    """Detailed health check"""
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "components": {
+            "telegram": bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID),
+            "github_webhook": bool(GITHUB_WEBHOOK_SECRET),
+            "system_time": datetime.utcnow().isoformat()
+        }
     })
 
 @app.route('/github', methods=['POST'])
-def webhook():
+def github_webhook():
+    """Handle GitHub webhook events"""
+    # Log incoming request
+    logger.info(f"Incoming webhook request from IP: {request.remote_addr}")
+    logger.debug(f"Request headers: {dict(request.headers)}")
+
     # Verify signature
-    sig = request.headers.get('X-Hub-Signature-256')
-    if not verify_signature(request.data, sig):
+    signature = request.headers.get('X-Hub-Signature-256')
+    if not signature:
+        logger.error("Missing X-Hub-Signature-256 header")
+        abort(400, "Missing signature header")
+
+    if not verify_github_signature(request.data, signature):
+        logger.error("Invalid webhook signature")
         abort(403, "Invalid signature")
 
-    data = request.get_json()
-    event = request.headers.get('X-GitHub-Event')
+    # Process payload
+    try:
+        data = request.get_json()
+        if not data:
+            logger.warning("Empty payload received")
+            return jsonify({"status": "ignored", "reason": "Empty payload"}), 200
 
-    if event == 'ping':
-        return jsonify({"status": "pong"})
+        event_type = request.headers.get('X-GitHub-Event', 'unknown')
+        logger.info(f"Processing {event_type} event")
 
-    if event == 'push':
-        repo = data.get('repository', {})
-        commits = data.get('commits', [])
-        if not commits:
-            return jsonify({"status": "ignored", "reason": "No commits"})
+        # Handle ping event
+        if event_type == 'ping':
+            logger.info("Received ping event")
+            return jsonify({"status": "pong", "zen": data.get('zen', '')}), 200
 
-        message = format_message(
-            repo,
-            commits,
-            data.get('ref', '').split('/')[-1],
-            data.get('pusher', {}).get('name', 'Unknown')
-        )
+        # Handle push event
+        if event_type == 'push':
+            repo = data.get('repository', {})
+            commits = data.get('commits', [])
+            branch = data.get('ref', '').split('/')[-1]
+            pusher = data.get('pusher', {}).get('name', 'Unknown')
 
-        if send_telegram(message):
-            return jsonify({"status": "sent"})
-        return jsonify({"status": "failed"})
+            if not commits:
+                logger.info("Push event with no commits")
+                return jsonify({"status": "ignored", "reason": "No commits"}), 200
 
-    return jsonify({"status": "ignored", "reason": "Unhandled event"})
+            results = []
+            for commit in commits:
+                try:
+                    message = (
+                        f"📌 *New Commit to {repo.get('name', 'Unnamed Repository')}*\n"
+                        f"━━━━━━━━━━━━━━━\n"
+                        f"👤 *Author*: {commit.get('author', {}).get('name', 'Unknown')}\n"
+                        f"🔹 *Branch*: `{branch}`\n"
+                        f"💬 *Message*: _{commit.get('message', 'No message')}_\n"
+                        f"━━━━━━━━━━━━━━━\n"
+                        f"🔗 [View Commit ↗]({commit.get('url', '#')})"
+                    )
+                    logger.debug(f"Formatted message: {message}")
+
+                    if send_telegram_message(message):
+                        results.append({"commit_id": commit.get('id'), "status": "sent"})
+                    else:
+                        results.append({"commit_id": commit.get('id'), "status": "failed"})
+                except Exception as commit_error:
+                    logger.error(f"Error processing commit: {str(commit_error)}")
+                    results.append({"commit_id": commit.get('id'), "status": "error"})
+
+            return jsonify({
+                "status": "processed",
+                "repo": repo.get('name'),
+                "branch": branch,
+                "results": results
+            }), 200
+
+        logger.warning(f"Unhandled event type: {event_type}")
+        return jsonify({"status": "ignored", "reason": f"Unhandled event type: {event_type}"}), 200
+
+    except Exception as e:
+        logger.error(f"Webhook processing failed: {str(e)}", exc_info=True)
+        abort(500, "Internal server error")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 10000)))
