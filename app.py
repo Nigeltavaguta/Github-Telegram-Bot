@@ -79,7 +79,7 @@ def github_webhook():
     # Verify signature
     signature = request.headers.get('X-Hub-Signature-256')
     if not verify_github_signature(request.data, signature):
-        logger.warning("Invalid webhook signature")
+        logger.warning("Invalid webhook signature!")
         abort(403, "Invalid signature")
 
     # Process push events
@@ -101,7 +101,7 @@ def github_webhook():
                 f"🌿 Branch: {branch}\n"
                 f"🕒 Time: {commit['timestamp']}\n"
                 f"📝 Message: {commit['message']}\n"
-                f"🔗 [View Commit]({commit['url']})"
+                f"🔗 [View Commit]({commit['url']})" 
             )
             if not send_telegram_message(message):
                 logger.error("Failed to send Telegram notification")
