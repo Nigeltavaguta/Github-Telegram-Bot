@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: Github-Telegram-Bot
+    runtime: python
+    buildCommand: ""
+    startCommand: "python app.py"
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        value: 8054638204:AAEtP-ilMQWRL1ECzI-2SUHxqHX9QZRV2qk
+      - key: TELEGRAM_CHAT_ID
+        value: 6786416278
