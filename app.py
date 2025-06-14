@@ -1,4 +1,4 @@
-from flask import Flask, request, abort
+from flask import Flask, request, abort, jsonify
 import requests
 import os
 import hmac
@@ -50,6 +50,29 @@ def send_telegram_message(text):
         logger.error(f"Telegram API error: {str(e)}")
         return False
 
+@app.route('/')
+def health_check():
+    """Root endpoint with service information"""
+    return jsonify({
+        "status": "running",
+        "service": "github-webhook",
+        "endpoints": {
+            "webhook": "/github (POST)",
+            "health": "/health (GET)"
+        }
+    })
+
+@app.route('/health')
+def deep_health_check():
+    """Detailed health check"""
+    return jsonify({
+        "status": "healthy",
+        "components": {
+            "telegram": bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID),
+            "github_webhook": bool(GITHUB_WEBHOOK_SECRET)
+        }
+    })
+
 @app.route('/github', methods=['POST'])
 def github_webhook():
     """Handle GitHub webhook events"""
@@ -63,7 +86,7 @@ def github_webhook():
     try:
         data = request.get_json()
         if not data or 'commits' not in data:
-            return '', 204
+            return jsonify({"status": "ignored", "reason": "No commits"}), 200
 
         repo = data['repository']
         commits = data['commits']
@@ -83,16 +106,11 @@ def github_webhook():
             if not send_telegram_message(message):
                 logger.error("Failed to send Telegram notification")
 
-        return '', 200
+        return jsonify({"status": "processed", "commits": len(commits)}), 200
 
     except Exception as e:
         logger.error(f"Webhook processing error: {str(e)}")
         abort(500, "Internal server error")
 
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Health check endpoint for monitoring"""
-    return {'status': 'healthy', 'service': 'github-webhook'}, 200
-
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 10000)))
